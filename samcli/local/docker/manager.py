@@ -17,7 +17,7 @@ LOG = logging.getLogger(__name__)
 class ContainerManager:
     """
     This class knows how to interface with Docker to create, execute and manage the container's life cycle. It can
-    run multiple containers in parallel, and also comes with the ability to reuse existing containers in order to
+    run multiple containers in parallel and also comes with the ability to reuse existing containers in order to
     serve requests faster. It is also thread-safe.
     """
 
@@ -25,9 +25,14 @@ class ContainerManager:
         """
         Instantiate the container manager
 
-        :param docker_network_id: Optional Docker network to run this container in.
-        :param docker_client: Optional docker client object
-        :param bool skip_pull_image: Should we pull new Docker container image?
+        Parameters
+        ----------
+        docker_network_id
+            Docker network to run this container in.
+        docker_client
+            docker client object
+        skip_pull_image : bool
+            If true, the image will not be pulled
         """
 
         self.skip_pull_image = skip_pull_image
@@ -50,11 +55,19 @@ class ContainerManager:
         """
         Create and run a Docker container based on the given configuration.
 
-        :param samcli.local.docker.container.Container container: Container to create and run
-        :param input_data: Optional. Input data sent to the container through container's stdin.
-        :param bool warm: Indicates if an existing container can be reused. Defaults False ie. a new container will
+        Parameters
+        ----------
+        container : samcli.local.docker.container.Container
+            Container to create and run
+        input_data
+            Input data sent to the container through container's stdin.
+        warm : bool
+            Indicates if an existing container can be reused. Defaults False ie. a new container will
             be created for every request.
-        :raises DockerImagePullFailedException: If the Docker image was not available in the server
+        Raises
+        ------
+        DockerImagePullFailedException
+            If the Docker image was not available in the server
         """
 
         if warm:
@@ -93,27 +106,30 @@ class ContainerManager:
 
     def stop(self, container):
         """
-        Stop and delete the container
+        Stops and deletes the container
 
-        :param samcli.local.docker.container.Container container: Container to stop
+        Parameters
+        ----------
+        container : samcli.local.docker.container.Container
+            Container to stop
         """
         container.delete()
 
     def pull_image(self, image_name, stream=None):
         """
-        Ask Docker to pull the container image with given name.
+        Asks Docker to pull the container image with given name.
 
         Parameters
         ----------
-        image_name str
+        image_name : str
             Name of the image
-        stream samcli.lib.utils.stream_writer.StreamWriter
+        stream : samcli.lib.utils.stream_writer.StreamWriter
             Optional stream writer to output to. Defaults to stderr
 
         Raises
         ------
         DockerImagePullFailedException
-            If the Docker image was not available in the server
+            If the Docker image was not available on the server
         """
         stream_writer = stream or StreamWriter(sys.stderr)
 
@@ -123,24 +139,23 @@ class ContainerManager:
             LOG.debug("Failed to download image with name %s", image_name)
             raise DockerImagePullFailedException(str(ex)) from ex
 
-        # io streams, especially StringIO, work only with unicode strings
-        stream_writer.write("\nFetching {} Docker container image...".format(image_name))
+        stream_writer.write("\nFetching {} Docker container image\n".format(image_name))
 
-        # Each line contains information on progress of the pull. Each line is a JSON string
-        for _ in result_itr:
-            # For every line, print a dot to show progress
-            stream_writer.write(".")
-            stream_writer.flush()
-
-        # We are done. Go to the next line
-        stream_writer.write("\n")
+        self._display_image_download_progress(stream_writer, result_itr)
 
     def has_image(self, image_name):
         """
         Is the container image with given name available?
 
-        :param string image_name: Name of the image
-        :return bool: True, if image is available. False, otherwise
+        Parameters
+        ----------
+        image_name : string
+            Name of the image
+
+        Returns
+        -------
+        bool
+            True, if the image is available. False, otherwise
         """
 
         try:
@@ -153,14 +168,65 @@ class ContainerManager:
         """
         Is the image tagged as a RAPID clone?
 
-        : param string image_name: Name of the image
-        : return bool: True, if the image name ends with rapid-$SAM_CLI_VERSION. False, otherwise
+        Parameters
+        ----------
+        image_name : string
+            Name of the image
+        
+        Returns
+        -------
+        bool
+            True, if the image name ends with rapid-$SAM_CLI_VERSION. False, otherwise
         """
 
         if not re.search(r":rapid-\d+\.\d+.\d+$", image_name):
             return False
         return True
 
+    def _display_image_download_progress(self, stream_writer, result_itr):
+        """
+        Displays the image download progress
+
+        Parameters
+        ----------
+        stream_writer : samcli.lib.utils.stream_writer.StreamWriter
+            Stream to write to
+        result_itr : generator
+            Iterator over the results
+        """
+
+        layers = {}
+  
+        for line in result_itr:
+            # Each line contains information on the pull
+            # "id" and "status" are present for every line
+            # "progressDetail" is only present for the "Downloading" status lines
+            if line["status"] == "Pulling fs layer":
+                # First lines, init the different layers to download
+                layers[line["id"]] = { "current": 0, "total": 0 }
+                continue
+
+            if line["status"] != "Downloading":
+                continue
+
+            # Update the download progress
+            layers[line["id"]]["current"] = int(line["progressDetail"]["current"])
+            layers[line["id"]]["total"] = int(line["progressDetail"]["total"])
+
+            current_sum = 0
+            current_total = 0
+
+            for _, value in layers.items():
+                current_sum += value["current"]
+                current_total += value["total"]
+
+            current_percentage = int((current_sum / current_total) * 100)
+
+            # "\r" at the beginning of the line allows rewriting/updating the current line
+            stream_writer.write("\rDownloading: {} / {} Bytes ({}%)".format(current_sum, current_total, current_percentage))
+
+        # Spaces to overwrite the previous line
+        stream_writer.write("\rDownloading: done                                          \n")
 
 class DockerImagePullFailedException(Exception):
     pass
