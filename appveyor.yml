@@ -137,9 +137,10 @@ for:
       - "pytest -n 4 tests/functional"
 
       # Runs only in Linux, logging docker hub when running canary and docker cred is available
+      # log out of Docker before logging in to avoid an unauthorized error
       - sh: "
         if [[ -n $BY_CANARY ]] && [[ -n $DOCKER_USER ]] && [[ -n $DOCKER_PASS ]];
-          then echo Logging in Docker Hub; echo $DOCKER_PASS | docker login --username $DOCKER_USER --password-stdin;
+          then echo Logging in Docker Hub; docker logout; echo $DOCKER_PASS | docker login --username $DOCKER_USER --password-stdin;
         fi"
       - sh: "pytest -vv tests/integration"
       - sh: "pytest -vv tests/regression"
